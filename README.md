@@ -30,10 +30,15 @@ What can Think2Drive + Bench2Drive provide ? <b>Please click to view the video.<
 #####
 ## Table of Contents: <a name="high"></a>
 1. [News](#News)
-2. [Dataset](#Dataset)
-3. [Benchmark](#Benchmark)
-4. [License](#license)
-5. [Citation](#citation)
+2. [Setup](#setup)
+3. [Dataset](#Dataset)
+4. [Agents & Models](#agents-models)
+5. [Ability Classification](#ability-classification)
+6. [Eval Tools](#eval-tools)
+7. [Deal with CARLA](#deal-with-carla)
+8. [Benchmark](#Benchmark)
+9. [License](#license)
+10. [Citation](#citation)
 
 ## News <a name="news"></a>
   - [2025/02/18] In our latest work [DriveTransformer (ICLR25)](https://openreview.net/forum?id=M42KR4W9P5), **a tiny validation set [Dev10](./leaderboard/data/drivetransformer_bench2drive_dev10.xml) is proposed for quick development of models.** The 10 clips are carefully selected from the official 220 routes, to be both difficult and representative with low variance.  It is suggested to be used for ablation study to avoid overfitting the whole bench2drive220 routes.
@@ -68,7 +73,10 @@ Use the command line: *huggingface-cli download --repo-type dataset --resume-dow
 ## Student Model Code (with Think2Drive as Teacher Model)
   - [Uniad/VAD](https://github.com/Thinklab-SJTU/Bench2DriveZoo/tree/uniad/vad) in Bench2Drive
   - [TCP/ADMLP](https://github.com/Thinklab-SJTU/Bench2DriveZoo/tree/tcp/admlp) in Bench2Drive
-## Setup
+
+## Setup <a name="setup"></a>
+
+### CARLA Installation
   - Download and setup CARLA 0.9.15
     ```bash
         mkdir carla
@@ -81,47 +89,344 @@ Use the command line: *huggingface-cli download --repo-type dataset --resume-dow
         echo "$CARLA_ROOT/PythonAPI/carla/dist/carla-0.9.15-py3.7-linux-x86_64.egg" >> YOUR_CONDA_PATH/envs/YOUR_CONDA_ENV_NAME/lib/python3.7/site-packages/carla.pth # python 3.8 also works well, please set YOUR_CONDA_PATH and YOUR_CONDA_ENV_NAME
     ```
 
-## Eval Tools
+### Model Weights Preparation (for IL Agent)
+  - The IL (Imitation Learning) agent requires pre-trained model weights
+  - Default weight location: `rl_ppo_model/checkpoints/best_model.pth`
+  - Model size: 9.5 MB
+  - Training data: Bench2Drive 50GB dataset
+
+### Dataset Preparation
+  - Download the appropriate dataset subset (Mini/Base/Full) from the links in the [Dataset](#dataset) section
+  - Extract the data to your desired location
+  - For IL training, the 50GB RL dataset is recommended: `Bench2Drive-RL50GB/`
+
+## Agents & Models <a name="agents-models"></a>
+
+Bench2Drive supports multiple types of autonomous agents for evaluation. Each agent has different capabilities and use cases.
+
+### 1. Autopilot Agent (Baseline)
+
+**Location**: `leaderboard/team_code/autopilot_agent.py`
+
+**Description**: Uses CARLA's built-in Traffic Manager for autonomous driving. Provides a strong baseline without requiring training data or model weights.
+
+**Key Features**:
+  - Track Mode: `Track.MAP` (minimal sensors required)
+  - Sensors: GPS + Speedometer only
+  - Driving Style: Aggressive (50% faster than speed limit)
+  - Traffic Manager Configuration:
+    - Respects traffic lights
+    - Auto lane change enabled
+    - Close following distance (1.5m)
+
+**When to Use**:
+  - Quick baseline testing
+  - Verifying scenario correctness
+  - Comparing against learned models
+  - No training data available
+
+**Usage**:
+```bash
+python3 leaderboard/leaderboard/leaderboard_evaluator.py \
+    --routes=leaderboard/data/bench2drive220.xml \
+    --agent=leaderboard/team_code/autopilot_agent.py \
+    --agent-config="" \
+    ...
+```
+
+### 2. IL Agent (Imitation Learning)
+
+**Location**: `leaderboard/team_code/il_agent.py`
+
+**Description**: Neural network-based agent trained via imitation learning on the Bench2Drive dataset. Uses camera inputs and vehicle states to predict driving actions.
+
+**Key Features**:
+  - Track Mode: `Track.SENSORS`
+  - Input: RGB camera + vehicle state (6D vector)
+  - Output: Throttle, Steering, Brake (3D action)
+  - Network Architecture:
+    - Image Encoder: 4-layer CNN (32→64→128→256)
+    - MLP: 3-layer FC (512→256→3)
+    - Dropout: 0.5
+
+**Model Weights**:
+  - Primary: `rl_ppo_model/checkpoints/best_model.pth` (9.5 MB)
+  - Training: 50 epochs on Bench2Drive-RL50GB dataset
+  - Additional checkpoints available: epoch 5, 10, 15, ..., 50
+
+**When to Use**:
+  - Learning-based driving behavior
+  - Research on imitation learning
+  - Evaluating data efficiency
+  - Custom driving style training
+
+**Usage**:
+```bash
+python3 leaderboard/leaderboard/leaderboard_evaluator.py \
+    --routes=leaderboard/data/bench2drive220.xml \
+    --agent=leaderboard/team_code/il_agent.py \
+    --agent-config="" \
+    ...
+```
+
+### 3. RL PPO Agent (Reinforcement Learning)
+
+**Location**: `leaderboard/team_code/rl_ppo_agent.py`
+
+**Description**: Agent based on Proximal Policy Optimization (PPO) algorithm. Designed for reinforcement learning research in autonomous driving.
+
+**Key Features**:
+  - Algorithm: PPO (Proximal Policy Optimization)
+  - Network Components:
+    - Actor Network
+    - Critic Network
+    - Value Network
+  - Configuration: `rl_ppo_model/config/ppo_config.yaml`
+
+**Code Structure**:
+```
+rl_ppo_model/
+├── agents/          # PPO algorithm implementation
+├── networks/        # Neural network architectures
+├── parameters/      # Parameter management
+├── config/          # Configuration files
+└── utils.py         # Utility functions
+```
+
+**When to Use**:
+  - Reinforcement learning research
+  - Online learning scenarios
+  - Policy optimization experiments
+  - Advanced RL algorithm development
+
+**Usage**:
+```bash
+python3 leaderboard/leaderboard/leaderboard_evaluator.py \
+    --routes=leaderboard/data/bench2drive220.xml \
+    --agent=leaderboard/team_code/rl_ppo_agent.py \
+    --agent-config=rl_ppo_model/config/ppo_config.yaml \
+    ...
+```
+
+### Agent Comparison
+
+| Feature | Autopilot | IL Agent | RL PPO Agent |
+|---------|-----------|----------|--------------|
+| Implementation | CARLA Traffic Manager | Neural Network | PPO Algorithm |
+| Track Mode | MAP | SENSORS | SENSORS |
+| Sensors | GPS + Speed | Camera + State | Camera + State |
+| Training Required | No | Yes | Yes |
+| Training Data | N/A | 50GB Dataset | Environment Interaction |
+| Model Weights | N/A | best_model.pth (9.5MB) | PPO checkpoints |
+| Driving Style | Aggressive | Learned | Optimized |
+| Best For | Baseline | Imitation Learning | RL Research |
+
+### Adding Custom Agents
+
+To add your own agent:
+
+1. Create agent file: `leaderboard/team_code/your_agent.py`
+2. Inherit from `AutonomousAgent` base class
+3. Implement required methods:
+   - `setup(path_to_conf_file)`
+   - `sensors()`
+   - `run_step(input_data, timestamp)`
+   - `destroy()`
+4. Link model folder under Bench2Drive directory if needed
+5. Run evaluation with your agent
+
+Example structure:
+```bash
+Bench2Drive/
+  leaderboard/
+    team_code/
+      your_agent.py          # Your agent implementation
+  your_model_folder/         # Your model weights/configs
+    checkpoints/
+    config/
+```
+
+## Ability Classification <a name="ability-classification"></a>
+
+Bench2Drive evaluates autonomous driving models across 5 fundamental driving abilities. The 220 test routes are classified into these categories for fine-grained performance analysis.
+
+### The 5 Driving Abilities
+
+#### 1. Overtaking (45 routes)
+Tests the ability to safely overtake obstacles and slow-moving vehicles.
+
+**Scenarios** (9 types):
+- Accident
+- AccidentTwoWays
+- ConstructionObstacle
+- ConstructionObstacleTwoWays
+- HazardAtSideLane
+- HazardAtSideLaneTwoWays
+- ParkedObstacle
+- ParkedObstacleTwoWays
+- VehicleOpensDoorTwoWays
+
+#### 2. Merging (80 routes)
+Tests the ability to merge into traffic flow and navigate complex junctions.
+
+**Scenarios** (16 types):
+- CrossingBicycleFlow
+- EnterActorFlow
+- HighwayExit
+- HighwayCutIn
+- InterurbanActorFlow
+- InterurbanAdvancedActorFlow
+- MergerIntoSlowTraffic
+- MergerIntoSlowTrafficV2
+- NonSignalizedJunctionLeftTurn
+- NonSignalizedJunctionRightTurn
+- NonSignalizedJunctionLeftTurnEnterFlow
+- ParkingExit
+- SequentialLaneChange
+- SignalizedJunctionLeftTurn
+- SignalizedJunctionRightTurn
+- SignalizedJunctionLeftTurnEnterFlow
+
+#### 3. Emergency Brake (60 routes)
+Tests the ability to react quickly to unexpected situations and apply emergency braking.
+
+**Scenarios** (12 types):
+- BlockedIntersection
+- DynamicObjectCrossing
+- HardBreakRoute
+- OppositeVehicleTakingPriority
+- OppositeVehicleRunningRedLight
+- ParkingCutIn
+- PedestrianCrossing
+- ParkingCrossingPedestrian
+- StaticCutIn
+- VehicleTurningRoute
+- VehicleTurningRoutePedestrian
+- ControlLoss
+
+#### 4. Give Way (10 routes)
+Tests the ability to yield to other vehicles with priority.
+
+**Scenarios** (2 types):
+- InvadingTurn
+- YieldToEmergencyVehicle
+
+#### 5. Traffic Signs (115 routes)
+Tests the ability to recognize and follow traffic rules and signals.
+
+**Note**: This category overlaps with other abilities as it includes 23 scenario types that involve traffic rule compliance.
+
+### Ability-Based Evaluation
+
+The ability classification enables:
+
+**Benefits**:
+1. Fine-grained performance analysis
+2. Identification of model strengths and weaknesses
+3. Targeted model improvement
+4. Modular testing (test individual abilities)
+5. More stable evaluation (smaller subsets)
+
+**Usage**:
+```bash
+# Run full evaluation first
+python3 leaderboard/leaderboard/leaderboard_evaluator.py \
+    --routes=leaderboard/data/bench2drive220.xml \
+    ...
+
+# Analyze ability-based results
+python3 tools/ability_benchmark.py \
+    -r your_results.json
+
+# View ability breakdown
+cat your_results_ability.json
+```
+
+**Ability Definitions**: See `tools/ability_benchmark.py` (lines 16-22) for the complete scenario-to-ability mapping.
+
+## Eval Tools <a name="eval-tools"></a>
+
+### Agent Selection
+
+Bench2Drive provides three evaluation agents:
+
+1. **Autopilot Agent** (`leaderboard/team_code/autopilot_agent.py`)
+   - CARLA Traffic Manager baseline
+   - No training required
+   - Fast and stable
+
+2. **IL Agent** (`leaderboard/team_code/il_agent.py`)
+   - Imitation learning based
+   - Requires model weights: `rl_ppo_model/checkpoints/best_model.pth`
+   - Trained on 50GB Bench2Drive dataset
+
+3. **RL PPO Agent** (`leaderboard/team_code/rl_ppo_agent.py`)
+   - Reinforcement learning based
+   - Configurable via `rl_ppo_model/config/ppo_config.yaml`
+   - For RL research and experiments
+
+### Setup Your Agent
   - Add your agent to leaderboard/team_code/your_agent.py & Link your model folder under the Bench2Drive directory.
     ```bash
-        Bench2Drive\ 
-          assets\
-          docs\
-          leaderboard\
-            team_code\
-              --> Please add your agent HEAR
-          scenario_runner\
-          tools\
-          --> Please link your model folder HEAR
+        Bench2Drive/
+          assets/
+          docs/
+          leaderboard/
+            team_code/
+              autopilot_agent.py    # CARLA Autopilot baseline
+              il_agent.py           # Imitation Learning agent
+              rl_ppo_agent.py       # RL PPO agent
+              --> Add your custom agent here
+          scenario_runner/
+          tools/
+          rl_ppo_model/             # Model weights and configs
+            checkpoints/
+              best_model.pth        # IL agent weights (9.5MB)
+            config/
+              ppo_config.yaml       # RL PPO configuration
+          --> Link your model folder here
     ```
-  - Debug Mode
+
+### Evaluation Modes
+
+  - **Debug Mode** - Verify agent correctness on a single route
     ```bash
-        # Verify the correctness of the team agent， need to set GPU_RANK, TEAM_AGENT, TEAM_CONFIG
+        # Set GPU_RANK, TEAM_AGENT, TEAM_CONFIG
         bash leaderboard/scripts/run_evaluation_debug.sh
     ```
-  - Multi-Process Multi-GPU Parallel Eval. If your team_agent saves any image for debugging, it might take lots of disk space.
+
+  - **Multi-Process Multi-GPU Parallel Evaluation** - Fast evaluation on multiple GPUs
     ```bash
-        # Please set TASK_NUM, GPU_RANK_LIST, TASK_LIST, TEAM_AGENT, TEAM_CONFIG, recommend GPU: Task(1:2).
-        # It is normal that certain model can not finsih certain routes, no matter how many times we restart the evaluation. It should be treated as failing as it usually happens in the routes where agents behave badly.
+        # Set TASK_NUM, GPU_RANK_LIST, TASK_LIST, TEAM_AGENT, TEAM_CONFIG
+        # Recommended ratio - GPU:Task = 1:2
+        # Example: 4 GPUs can handle 8 parallel tasks
         bash leaderboard/scripts/run_evaluation_multi_uniad.sh
     ```
-  - Visualization - make a video for debugging with canbus info printed on the sequential images.
+    Note: Some routes may fail even with multiple retries - this is normal and indicates poor agent performance on those specific scenarios.
+
+### Visualization & Analysis
+
+  - **Create Debug Video** - Generate videos with CAN bus information
     ```bash
         python tools/generate_video.py -f your_rgb_folder/
     ```
-  - Metric: **Make sure there are exactly 220 routes in your json. Failed/Crashed status is also acceptable. Otherwise, the metric is inaccurate.**
+
+  - **Compute Metrics** - Calculate driving score and success rate
     ```bash
-        # Merge eval json and get driving score and success rate
-        # This script will assume the total number of routes with results is 220. If there is not enough, the missed ones will be treated as 0 score.
+        # Merge evaluation JSONs and compute overall metrics
+        # Requires exactly 220 routes (failed/crashed routes are acceptable)
         python tools/merge_route_json.py -f your_json_folder/
 
-        # Get multi-ability results
+        # Compute multi-ability performance breakdown
         python tools/ability_benchmark.py -r merge.json
 
-        # Get driving efficiency and driving smoothness results
+        # Compute driving efficiency and smoothness
         python tools/efficiency_smoothness_benchmark.py -f merge.json -m your_metric_folder/
     ```
-## Deal with CARLA
+
+    **Important**: The metric calculation assumes 220 total routes. If fewer routes are present, missing ones are scored as 0.
+
+## Deal with CARLA <a name="deal-with-carla"></a>
 
 - CARLA has complex dependencies and is not stable. Please check the issue section of CARLA **very carefully**.
 - Use tools/clean_carla.sh frequently and multiple times. Some CARLA processes are difficult to kill. Be sure to clean_carla could avoid lots of bugs.

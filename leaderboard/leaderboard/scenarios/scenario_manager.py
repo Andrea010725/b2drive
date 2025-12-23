@@ -227,9 +227,13 @@ class ScenarioManager(object):
             if self.scenario_tree.status != py_trees.common.Status.RUNNING:
                 self._running = False
 
+            # Update spectator to follow ego vehicle
             ego_trans = self.ego_vehicles[0].get_transform()
-            self._spectator.set_transform(carla.Transform(ego_trans.location + carla.Location(z=70),
-                                                          carla.Rotation(pitch=-90)))
+            spectator_transform = carla.Transform(
+                ego_trans.location + carla.Location(z=50),  # 50m above ego
+                carla.Rotation(pitch=-90, yaw=ego_trans.rotation.yaw)  # Top-down view, following ego's heading
+            )
+            self._spectator.set_transform(spectator_transform)
 
     def get_running_status(self):
         """
@@ -264,8 +268,9 @@ class ScenarioManager(object):
 
         # Make sure the scenario thread finishes to avoid blocks
         self._running = False
-        self._scenario_thread.join()
-        self._scenario_thread = None
+        if self._scenario_thread is not None:
+            self._scenario_thread.join()
+            self._scenario_thread = None
 
     def compute_duration_time(self):
         """

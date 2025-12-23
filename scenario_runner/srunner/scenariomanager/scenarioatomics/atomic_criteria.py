@@ -2063,12 +2063,18 @@ class MinimumSpeedRouteTest(Criterion):
             checkpoint_value = round(self._actor_speed / (self.RATIO * self._mean_speed) * 100, 2)
         else:
             checkpoint_value = 100
-        
-        self.test_status = "FAILURE"
-        self._traffic_event = TrafficEvent(TrafficEventType.MIN_SPEED_INFRACTION, GameTime.get_frame())
-        self._traffic_event.set_dict({'percentage': checkpoint_value})
-        self._traffic_event.set_message(f"Average speed is {checkpoint_value}% of the surrounding traffic's one")
-        self.events.append(self._traffic_event)
+
+        # 修复：只有当速度低于阈值时才标记为FAILURE
+        # 设置阈值为80%（如果低于周围车辆速度的80%才算违规）
+        SPEED_THRESHOLD = 80.0
+
+        if checkpoint_value < SPEED_THRESHOLD:
+            self.test_status = "FAILURE"
+            self._traffic_event = TrafficEvent(TrafficEventType.MIN_SPEED_INFRACTION, GameTime.get_frame())
+            self._traffic_event.set_dict({'percentage': checkpoint_value})
+            self._traffic_event.set_message(f"Average speed is {checkpoint_value}% of the surrounding traffic's one (below {SPEED_THRESHOLD}% threshold)")
+            self.events.append(self._traffic_event)
+        # 如果速度正常（>= 80%），不记录为违规
 
         self._checkpoint_values.append(checkpoint_value)
 

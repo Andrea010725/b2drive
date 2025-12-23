@@ -1,4 +1,6 @@
 import json
+import sys
+
 import carla
 import argparse
 import xml.etree.ElementTree as ET

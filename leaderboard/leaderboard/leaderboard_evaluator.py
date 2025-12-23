@@ -20,13 +20,13 @@ import importlib
 import os
 import pkg_resources
 import sys
+
 import carla
 import signal
 
 from srunner.scenariomanager.carla_data_provider import *
 from srunner.scenariomanager.timer import GameTime
 from srunner.scenariomanager.watchdog import Watchdog
-
 from leaderboard.scenarios.scenario_manager import ScenarioManager
 from leaderboard.scenarios.route_scenario import RouteScenario
 from leaderboard.envs.sensor_interface import SensorConfigurationInvalid
@@ -189,10 +189,11 @@ class LeaderboardEvaluator(object):
             self.manager.cleanup()
 
         # Make sure no sensors are left streaming
-        alive_sensors = self.world.get_actors().filter('*sensor*')
-        for sensor in alive_sensors:
-            sensor.stop()
-            sensor.destroy()
+        if self.world is not None:
+            alive_sensors = self.world.get_actors().filter('*sensor*')
+            for sensor in alive_sensors:
+                sensor.stop()
+                sensor.destroy()
 
     def _setup_simulation(self, args):
         """
@@ -204,15 +205,16 @@ class LeaderboardEvaluator(object):
         self.server = subprocess.Popen(cmd1, shell=True, preexec_fn=os.setsid)
         print(cmd1, self.server.returncode, flush=True)
         atexit.register(os.killpg, self.server.pid, signal.SIGKILL)
-        time.sleep(30)
-            
+        time.sleep(60)
+
         attempts = 0
         num_max_restarts = 20
         while attempts < num_max_restarts:
             try:
                 client = carla.Client(args.host, args.port)
+                client_timeout = 30.0
                 if args.timeout:
-                    client_timeout = args.timeout
+                    client_timeout = max(args.timeout, 30.0)
                 client.set_timeout(client_timeout)
 
                 settings = carla.WorldSettings(
@@ -250,48 +252,134 @@ class LeaderboardEvaluator(object):
         """
         Changes the modified world settings back to asynchronous
         """
-        # Has simulation failed?
-        if self.world and self.manager and not self._client_timed_out:
-            # Reset to asynchronous mode
-            self.world.tick()  # TODO: Make sure all scenario actors have been destroyed
-            settings = self.world.get_settings()
-            settings.synchronous_mode = False
-            settings.fixed_delta_seconds = None
-            settings.deterministic_ragdolls = False
-            settings.spectator_as_ego = True
-            self.world.apply_settings(settings)
+        try:
+            # Has simulation failed?
+            if self.world and self.manager and not self._client_timed_out:
+                # Reset to asynchronous mode
+                self.world.tick()  # TODO: Make sure all scenario actors have been destroyed
+                settings = self.world.get_settings()
+                settings.synchronous_mode = False
+                settings.fixed_delta_seconds = None
+                settings.deterministic_ragdolls = False
+                settings.spectator_as_ego = True
+                self.world.apply_settings(settings)
 
-            # Make the TM back to async
-            self.traffic_manager.set_synchronous_mode(False)
-            self.traffic_manager.set_hybrid_physics_mode(False)
+                # Make the TM back to async
+                self.traffic_manager.set_synchronous_mode(False)
+                self.traffic_manager.set_hybrid_physics_mode(False)
+        except Exception as e:
+            print(f"\nWarning: Failed to reset world settings: {e}", flush=True)
+            print("Continuing evaluation...\n", flush=True)
+
+    def _check_server_health(self, args):
+        """
+        Check if CARLA server is healthy, attempt reconnection if not
+        """
+        try:
+            version = self.client.get_server_version()
+            return True
+        except Exception as e:
+            print(f"Server health check failed: {e}", flush=True)
+            return False
+
+    def _reconnect_to_server(self, args, max_attempts=5):
+        """
+        Reconnect to CARLA server
+        """
+        for attempt in range(max_attempts):
+            try:
+                print(f"[Reconnect attempt {attempt+1}/{max_attempts}] Reconnecting to server...", flush=True)
+
+                # Clean up old connections
+                self.client = None
+                self.world = None
+                self.traffic_manager = None
+
+                # Wait for server to recover
+                wait_time = 30 + (attempt * 10)
+                print(f"Waiting {wait_time} seconds for server recovery...", flush=True)
+                time.sleep(wait_time)
+
+                # Create new connection
+                self.client = carla.Client(args.host, args.port)
+                self.client.set_timeout(600.0)
+
+                # Test connection
+                version = self.client.get_server_version()
+                print(f"Successfully connected to server (version: {version})", flush=True)
+
+                # Re-acquire traffic manager
+                self.traffic_manager = self.client.get_trafficmanager(args.traffic_manager_port)
+
+                return True
+
+            except Exception as e:
+                print(f"Reconnection failed (attempt {attempt+1}/{max_attempts}): {e}", flush=True)
+                if attempt < max_attempts - 1:
+                    print(f"Retrying...", flush=True)
+                else:
+                    print("Maximum reconnection attempts reached, giving up", flush=True)
+                    return False
 
     def _load_and_wait_for_world(self, args, town):
         """
         Load a new CARLA world without changing the settings and provide data to CarlaDataProvider
         """
-        self.world = self.client.load_world(town, reset_settings=False)
+        max_attempts = 3
+        for attempt in range(max_attempts):
+            try:
+                # Check server health before loading world
+                if not self._check_server_health(args):
+                    print("Server unhealthy, attempting reconnection...", flush=True)
+                    if not self._reconnect_to_server(args):
+                        raise Exception("Unable to reconnect to CARLA server")
 
-        # Large Map settings are always reset, for some reason
-        settings = self.world.get_settings()
-        settings.tile_stream_distance = 650
-        settings.actor_active_distance = 650
-        self.world.apply_settings(settings)
+                print(f"[Attempt {attempt+1}/{max_attempts}] Loading world: {town}", flush=True)
+                self.world = self.client.load_world(town, reset_settings=False)
 
-        self.world.reset_all_traffic_lights()
-        CarlaDataProvider.set_client(self.client)
-        CarlaDataProvider.set_traffic_manager_port(args.traffic_manager_port)
-        CarlaDataProvider.set_world(self.world)
+                # Large Map settings are always reset, for some reason
+                settings = self.world.get_settings()
+                settings.tile_stream_distance = 650
+                settings.actor_active_distance = 650
+                self.world.apply_settings(settings)
 
-        # This must be here so that all route repetitions use the same 'unmodified' seed
-        self.traffic_manager.set_random_device_seed(args.traffic_manager_seed)
+                self.world.reset_all_traffic_lights()
 
-        # Wait for the world to be ready
-        self.world.tick()
+                CarlaDataProvider.set_client(self.client)
+                CarlaDataProvider.set_traffic_manager_port(args.traffic_manager_port)
+                CarlaDataProvider.set_world(self.world)
 
-        map_name = CarlaDataProvider.get_map().name.split("/")[-1]
-        if map_name != town:
-            raise Exception("The CARLA server uses the wrong map!"
-                            " This scenario requires the use of map {}".format(town))
+                # This must be here so that all route repetitions use the same 'unmodified' seed
+                self.traffic_manager.set_random_device_seed(args.traffic_manager_seed)
+
+                # Wait for the world to be ready
+                self.world.tick()
+
+                map_name = CarlaDataProvider.get_map().name.split("/")[-1]
+                if map_name != town:
+                    raise Exception("The CARLA server uses the wrong map!"
+                                    " This scenario requires the use of map {}".format(town))
+
+                print(f"World {town} loaded successfully", flush=True)
+                return
+
+            except Exception as e:
+                error_msg = str(e)
+                print(f"Failed to load world (attempt {attempt+1}/{max_attempts}): {error_msg}", flush=True)
+
+                # If timeout error, server may have crashed
+                if "time-out" in error_msg or "timeout" in error_msg.lower():
+                    print("Timeout detected, server may have crashed", flush=True)
+                    if attempt < max_attempts - 1:
+                        print("Attempting server reconnection...", flush=True)
+                        self._reconnect_to_server(args)
+
+                if attempt < max_attempts - 1:
+                    print("Waiting 10 seconds before retry...", flush=True)
+                    time.sleep(10)
+                else:
+                    print("Maximum retry attempts reached, raising exception", flush=True)
+                    raise
 
     def _register_statistics(self, route_index, entry_status, crash_message=""):
         """
@@ -480,15 +568,21 @@ class LeaderboardEvaluator(object):
             self.statistics_manager.save_progress(route_indexer.index, route_indexer.total)
             self.statistics_manager.write_statistics()
             if crashed:
-                print(f'{route_indexer.index} crash, [{route_indexer.index}/{route_indexer.total}], please restart', flush=True)
-                break
+                print(f'{route_indexer.index} crash, [{route_indexer.index}/{route_indexer.total}], continue with next route', flush=True)
+                # 重置 crashed 状态，以便继续处理下一个路线
+                crashed = False
+                continue
 
         # Shutdown ROS1 bridge server if necessary
         if self._ros1_server is not None:
             self._ros1_server.shutdown()
 
         # Go back to asynchronous mode
-        self._reset_world_settings()
+        try:
+            self._reset_world_settings()
+        except Exception as e:
+            print(f"\nWarning: Unable to reset world settings: {e}", flush=True)
+            print("This will not affect evaluation results, continuing to save statistics...\n", flush=True)
 
         if not crashed:
             # Save global statistics
@@ -498,7 +592,7 @@ class LeaderboardEvaluator(object):
             self.statistics_manager.validate_and_write_statistics(self.sensors_initialized, crashed)
         
         if crashed:
-            cmd2 = "ps -ef | grep '-graphicsadapter="+ str(args.gpu_rank) + "' | grep -v grep | awk '{print $2}' | xargs -r kill -9"
+            cmd2 = "ps -ef | grep 'graphicsadapter=" + str(args.gpu_rank) + "' | grep -v grep | awk '{print $2}' | xargs -r kill -9"
             server = subprocess.Popen(cmd2, shell=True, preexec_fn=os.setsid)
             atexit.register(os.killpg, server.pid, signal.SIGKILL)
 

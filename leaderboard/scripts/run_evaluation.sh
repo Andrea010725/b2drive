@@ -11,7 +11,7 @@ export PYTHONPATH=$PYTHONPATH:scenario_runner
 export SCENARIO_RUNNER_ROOT=scenario_runner
 
 export LEADERBOARD_ROOT=leaderboard
-export CHALLENGE_TRACK_CODENAME=SENSORS
+export CHALLENGE_TRACK_CODENAME=MAP
 export PORT=$1
 export TM_PORT=$2
 export DEBUG_CHALLENGE=0

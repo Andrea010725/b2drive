@@ -1,0 +1,81 @@
+# PPO Agent Configuration for Bench2Drive
+# RL PPO Agent 配置文件
+
+# ====================================
+# 网络架构配置
+# ====================================
+network:
+  # 策略网络隐藏层单元数
+  policy_hidden_units: [512, 256]
+  # 价值网络隐藏层单元数
+  value_hidden_units: [512, 256]
+  # 激活函数
+  activation: relu
+
+# ====================================
+# PPO 超参数
+# ====================================
+# 策略网络学习率
+policy_lr: 3.0e-5
+
+# 价值网络学习率
+value_lr: 3.0e-5
+
+# 折扣因子 (gamma)
+gamma: 0.9999
+
+# GAE lambda参数
+lambda_: 0.999
+
+# PPO clip参数
+clip_ratio: 0.15
+
+# 熵正则化系数
+entropy_regularization: 0.5
+
+# ====================================
+# 模型权重路径
+# ====================================
+# 预训练权重路径（如果有的话）
+weights_path: /home/ajifang/b2drive/rl_agent/carla-driving-rl-agent-master/weights/stage-s1-26
+
+# ====================================
+# 训练配置（用于在B2D上训练时）
+# ====================================
+training:
+  # 批大小
+  batch_size: 32
+
+  # 每个episode的采样数
+  episodes: 5
+
+  # 每个episode的最大步数
+  timesteps: 512
+
+  # 更新频率
+  update_frequency: 1
+
+  # 训练轮数
+  epochs: 60
+
+  # 保存频率
+  save_every: 1
+
+  # 优化步数
+  optimization_steps: 10
+
+# ====================================
+# 推理配置（用于评估时）
+# ====================================
+inference:
+  # 是否加载预训练权重
+  load_weights: true
+
+  # 批大小（推理时固定为1）
+  batch_size: 1
+
+  # 是否启用调试模式
+  debug: false
+
+  # 状态缓存大小（用于时序建模）
+  state_buffer_size: 4
